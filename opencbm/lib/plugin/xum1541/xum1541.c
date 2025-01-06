@@ -787,7 +787,7 @@ xum1541_control_msg(struct opencbm_usb_handle *HandleXum1541, unsigned int cmd)
     if (nBytes < 0) {
         fprintf(stderr, "USB error in xum1541_control_msg: %s\n",
             usb.error_name(nBytes));
-        exit(-1); /** \todo WHY? */
+        return(nBytes); /** \todo WHY? */
     }
 
     return nBytes;
@@ -826,12 +826,12 @@ xum1541_wait_status(struct opencbm_usb_handle *HandleXum1541)
             default:
                 fprintf(stderr, "unknown status value: %d\n",
                     XUM_GET_STATUS(statusBuf));
-                exit(-1);
+                return(-1);
             }
         } else {
             fprintf(stderr, "USB error in xum1541_wait_status: %s\n",
                 usb.error_name(ret));
-            exit(-1); /** \todo WHY? */
+            return(-1); /** \todo WHY? */
         }
     }
 
@@ -928,12 +928,15 @@ xum1541_ioctl(struct opencbm_usb_handle *HandleXum1541, unsigned int cmd, unsign
 
 #if HAVE_LIBUSB0
     if (nBytes < 0) {
-#elif HAVE_LIBUSB1
-    if (ret != LIBUSB_SUCCESS) {
-#endif
         fprintf(stderr, "USB error in xum1541_ioctl cmd: %s\n",
             usb.error_name(ret));
-        exit(-1);
+        return nBytes;  // Return the error code directly
+#elif HAVE_LIBUSB1
+    if (ret != LIBUSB_SUCCESS) {
+        fprintf(stderr, "USB error in xum1541_ioctl cmd: %s\n",
+            usb.error_name(ret));
+        return ret;     // Return the libusb error code
+#endif
     }
 
     // If we have a valid response, return extended status
