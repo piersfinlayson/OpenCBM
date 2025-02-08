@@ -362,15 +362,15 @@ xum1541_enumerate(libusb_device_handle **usbHandle, libusb_device **usbDevice, D
 
 int
 #if HAVE_LIBUSB0
-xum1541_get_model_version(usb_dev_handle *handle, int *model, int *version)
+xum1541_get_model_version_serial(usb_dev_handle *handle, int *model, int *version, char *string, int string_len)
 #elif HAVE_LIBUSB1
-xum1541_get_model_version(libusb_device_handle *handle, libusb_device * dev, int *model, int *version)
+xum1541_get_model_version_serial(libusb_device_handle *handle, libusb_device * dev, int *model, int *version, char *string, int string_len)
 #endif
 {
 #if HAVE_LIBUSB0
     struct usb_device *dev;
 #endif
-    int revision;
+    int revision, len;
 
 #if HAVE_LIBUSB0
     dev = usb_device(handle);
@@ -392,6 +392,27 @@ xum1541_get_model_version(libusb_device_handle *handle, libusb_device * dev, int
 #endif
     *model = revision >> 8;
     *version = revision & 0xff;
+
+    len = usbGetStringAsciiU(handle,
+#if HAVE_LIBUSB0
+    dev->descriptor.iSerialNumber,
+#elif HAVE_LIBUSB1
+    descriptor.iSerialNumber,
+#endif
+    0x0409, string, string_len - 1);
+
+    if (len < 0) {
+#if HAVE_LIBUSB0
+        xum1541_cleanup(&handle, 
+            "error: cannot query serial number: %s\n", usb_strerror());
+#elif HAVE_LIBUSB1
+        xum1541_cleanup(&handle,
+            "error: cannot query serial number: %s\n", libusb_error_name(len));
+#endif
+        return -1;
+    }
+    string[len] = '\0';
+
     return 0;
 }
 

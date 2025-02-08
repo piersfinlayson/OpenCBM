@@ -25,12 +25,12 @@
 #endif
 
 #if HAVE_LIBUSB0
-int xum1541_get_model_version(usb_dev_handle *handle, int *model,
-    int *version);
+int xum1541_get_model_version_serial(usb_dev_handle *handle, int *model,
+    int *version, char *serial, int serial_len);
 usb_dev_handle *
 #elif HAVE_LIBUSB1
-int xum1541_get_model_version(libusb_device_handle *handle, libusb_device *dev,
-    int *model, int *version);
+int xum1541_get_model_version_serial(libusb_device_handle *handle, libusb_device *dev,
+    int *model, int *version, char *serial, int serial_len);
 libusb_device_handle *
 #endif
 #if HAVE_LIBUSB0

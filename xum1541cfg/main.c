@@ -68,7 +68,7 @@ static struct XumDevice validDeviceTypes[] = {
 #define AVR_MAX_FW_SIZE     262144
 
 static int StartBootloader(char *deviceType);
-static int RunUpdate(dfu_device_t *devHandle, char *firmwareFile,
+static int RunUpdate(dfu_device_t *devHandle, char *firmwareFile, uint8_t serial, 
      char *deviceType, int forceFlag);
 static int PrintFirmwareInfo(char *firmwareFile);
 
@@ -144,10 +144,11 @@ StartBootloader(char *deviceType)
 
 // Update a device with new firmware from a file
 static int
-RunUpdate(dfu_device_t *devHandle, char *firmwareFile, char *deviceType,
+RunUpdate(dfu_device_t *devHandle, char *firmwareFile, uint8_t serial, char *deviceType,
     int forceFlag)
 {
     int ret, fileModel, fileVersion;
+    int16_t serial_data;
 #if HAVE_LIBUSB0
     usb_dev_handle *usbHandle;
 #elif HAVE_LIBUSB1
@@ -215,6 +216,20 @@ RunUpdate(dfu_device_t *devHandle, char *firmwareFile, char *deviceType,
         fprintf(stderr, "error: flash erase failed\n");
         return ret;
     }
+    if (serial) {
+        // Only need to set the serial number if it's not 0, as 0 converts to
+        // 0xff, which is the unprogrammed (erased) eeprom value.
+        serial_data = (~serial) & 0xff; 
+        // Call atmel_flash directly, as the alternative is to execute the
+        // execute_flash_eeprom command.  However this requires a hex file
+        // with the serial number in it, which is not the case here, and we
+        // don't want to create one.
+        ret = atmel_flash(devHandle, &serial_data, 0, 1, 1, true);
+        if (ret != 1) {
+            fprintf(stderr, "error: serial number update failed %d, %d\n", serial_data, ret);
+            return ret;
+        }
+    }
     ret = UpdateFlash(devHandle, &args, firmwareFile);
     if (ret != 0) {
         fprintf(stderr, "error: flash update failed\n");
@@ -258,6 +273,7 @@ PrintDeviceInfo(char *deviceType)
     libusb_device *usbDevice;
 #endif
     int devModel, devVersion, ret;
+    char serial[32];
 
     // Find an xum1541 device and verify the firmware matches
     fprintf(stderr, "finding device...\n");
@@ -272,9 +288,9 @@ PrintDeviceInfo(char *deviceType)
 
         // Download the current version info
 #if HAVE_LIBUSB0
-        ret = xum1541_get_model_version(usbHandle, &devModel, &devVersion);
+        ret = xum1541_get_model_version_serial(usbHandle, &devModel, &devVersion, serial, sizeof(serial));
 #elif HAVE_LIBUSB1
-        ret = xum1541_get_model_version(usbHandle, usbDevice, &devModel, &devVersion);
+        ret = xum1541_get_model_version_serial(usbHandle, usbDevice, &devModel, &devVersion, serial, sizeof(serial));
 #endif
         if (ret != 0)
         {
@@ -287,7 +303,8 @@ PrintDeviceInfo(char *deviceType)
         else {
             deviceName = "UNKNOWN";
         }
-        printf("xum1541 device, model %d (%s), firmware version %d\n", devModel, deviceName, devVersion);
+
+        printf("xum1541 device, model %d (%s), firmware version %d, serial: %s\n", devModel, deviceName, devVersion, serial);
 
         if (devModel >= NO_OF_DEVICE_TYPES) {
             printf("  device reports itself as: '%s'\n", devNameBuf);
@@ -540,12 +557,13 @@ CheckFirmwareVersion(libusb_device_handle *usbHandle, libusb_device *usbDevice, 
 #endif
 {
     int devModel, devVersion, ret;
+    char serial[32];
 
     // Download the current version info
 #if HAVE_LIBUSB0
-    ret = xum1541_get_model_version(usbHandle, &devModel, &devVersion);
+    ret = xum1541_get_model_version_serial(usbHandle, &devModel, &devVersion, serial, sizeof(serial));
 #elif HAVE_LIBUSB1
-    ret = xum1541_get_model_version(usbHandle, usbDevice, &devModel, &devVersion);
+    ret = xum1541_get_model_version_serial(usbHandle, usbDevice, &devModel, &devVersion, serial, sizeof(serial));
 #endif
     if (ret != 0) {
         fprintf(stderr, "failed to retrieve device version\n");
@@ -641,6 +659,18 @@ ihex_search(int16_t *buf, int bufSize, uint8_t *pattern, uint8_t patternSize)
     return &buf[i];
 }
 
+static int
+GetSerial(char *serial)
+{
+    int serialNum;
+
+    serialNum = atoi(serial);
+    if (serialNum < 0 || serialNum > 255) {
+        return -1;
+    }
+    return serialNum;
+}
+
 static void
 usage(void)
 {
@@ -651,10 +681,11 @@ usage(void)
 "Flags:\n"
 "  -v: enable verbose status messages\n\n"
 "Commands:\n"
-"* update xum1541-firmware.hex\n"
+"* update xum1541-firmware.hex [serial]\n"
 "    Updates the firmware of an xum1541 device. Optional flags:\n"
 "      -t type: specify the device type (defaults to \"ZOOMFLOPPY\")\n"
 "      -f: force update to given firmware. USE WITH CAUTION!\n"
+"      serial can optionally be provided - must be between 0 and 255"
 "* bootloader\n"
 "    Put the xum1541 device into bootloader mode. Optional flags:\n"
 "      -t type: specify the device type (defaults to \"ZOOMFLOPPY\")\n"
@@ -689,7 +720,7 @@ __cdecl
 #endif
 main(int argc, char *argv[])
 {
-    int ch, force, retval, rv;
+    int ch, force, retval, rv, serial;
     char *deviceType;
     struct XumDevice *devPtr;
     dfu_device_t dfuDevice;
@@ -740,11 +771,20 @@ main(int argc, char *argv[])
     // Now run the given command
     retval = 1;
     if (!strcmp(*argv, "update")) {
-        if (argc != 2) {
-            fprintf(stderr, "\"update\" needs a single filename arg\n");
+        if ((argc < 2) || (argc >> 3)) {
+            fprintf(stderr, "\"update\" needs a single filename arg and optional serial number\n");
             goto error;
         }
-        if (RunUpdate(&dfuDevice, argv[1], deviceType, force) != 0)
+        if (argc == 3) {
+            serial = GetSerial(argv[2]);
+            if (serial < 0) {
+                fprintf(stderr, "serial number must be between 0 and 255");
+                goto error;
+            }
+        } else {
+            serial = 0;
+        }
+        if (RunUpdate(&dfuDevice, argv[1], (uint8_t)serial, deviceType, force) != 0)
             goto error;
     } else if (!strcmp(*argv, "bootloader")) {
         if (StartBootloader(deviceType) != 0)
